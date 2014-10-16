@@ -11,6 +11,8 @@
 
 #define LWIP_DHCP			1
 
+#define LWIP_HTTPD_SSI	1
+
 #define MEM_ALIGNMENT			4
 
 /* Heap memory size */

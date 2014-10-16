@@ -53,7 +53,9 @@ typedef unsigned short uip_stats_t;
 //
 // UDP support on or off
 //
-#define UIP_CONF_UDP                1
+#define UIP_CONF_UDP                0
+
+#define UIP_BROADCAST 0
 
 //
 // UDP checksums on or off
@@ -65,33 +67,20 @@ typedef unsigned short uip_stats_t;
 // UDP Maximum Connections
 //
 #define UIP_CONF_UDP_CONNS          4
-
-//
 // Maximum number of TCP connections.
-//
 #define UIP_CONF_MAX_CONNECTIONS    2
-
-//
 // Maximum number of listening TCP ports.
 //
 #define UIP_CONF_MAX_LISTENPORTS    4
-
-//
 // Size of advertised receiver's window
 //
 //#define UIP_CONF_RECEIVE_WINDOW     400
-
-//
 // Size of ARP table
 //
 #define UIP_CONF_ARPTAB_SIZE        8
-
-//
 // uIP buffer size.
 //
 #define UIP_CONF_BUFFER_SIZE        1600
-
-//
 // uIP buffer is defined in the application.
 //
 #undef UIP_CONF_EXTERNAL_BUFFER
@@ -100,50 +89,39 @@ typedef unsigned short uip_stats_t;
 // uIP statistics on or off
 //
 #define UIP_CONF_STATISTICS         1
-
-//
 // Logging on or off
 //
 #define UIP_CONF_LOGGING            1
-
-//
 // Broadcast Support
-//
 #define UIP_CONF_BROADCAST          1
-
-//
 // Link-Level Header length
 //
 #define UIP_CONF_LLH_LEN            14
-
-//
 // CPU byte order.
-//
 #define UIP_CONF_BYTE_ORDER         LITTLE_ENDIAN
 
 //
 // Here we include the header file for the application we are using in
 // this example
 //
-#include "httpd.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+struct httpd_state {
+  uint8_t	idle_count;
+  uint8_t	data_count;
+  uint8_t	state;
+  uint8_t	request_type;
+  const uint8_t	*xmit_buf;
+  uint16_t	xmit_buf_size;
+  uint16_t	offset;
+  bool		done;
+};
+
 //
 // Define the uIP Application State type, based on the httpd.h state variable.
 //
 typedef struct httpd_state uip_tcp_appstate_t;
 
-//
-// UIP_APPCALL: the name of the application function. This function
-// must return void and take no arguments (i.e., C type "void
-// appfunc(void)").
-//
-#ifndef UIP_APPCALL
-#define UIP_APPCALL     httpd_appcall
-#endif
-
-//
-// Here we include the header file for the DPCP client we are using in
-// this example
-//
-#include "apps/dhcpc/dhcpc.h"
 
 #endif // __UIP_CONF_H_

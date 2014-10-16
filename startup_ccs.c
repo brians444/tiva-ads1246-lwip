@@ -42,6 +42,7 @@ extern void _c_int00(void);
 extern void SysTickIntHandler(void);
 extern void UARTStdioIntHandler(void);
 extern void GPIOPortEIntHandler(void);
+extern void DataReadyIntHandler(void);	//Ads interrupt
 
 //*****************************************************************************
 //
@@ -79,7 +80,7 @@ void (* const g_pfnVectors[])(void) =
     SysTickIntHandler,                      // The SysTick handler
     IntDefaultHandler,                      // GPIO Port A
     IntDefaultHandler,                      // GPIO Port B
-    IntDefaultHandler,                      // GPIO Port C
+    DataReadyIntHandler,                      // GPIO Port C
     IntDefaultHandler,                      // GPIO Port D
     GPIOPortEIntHandler,                    // GPIO Port E
     UARTStdioIntHandler,                    // UART0 Rx and Tx

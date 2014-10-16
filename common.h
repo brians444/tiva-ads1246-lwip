@@ -16,8 +16,6 @@
 
 #define printf          UARTprintf
 
-#define SRAM_CS		GPIO_PIN_5
-
 #define BUF	((struct uip_eth_hdr *)uip_buf)
 
 #define HW_SSI

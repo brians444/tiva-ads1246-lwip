@@ -1,34 +1,187 @@
-#include <inc/hw_ints.h>
-#include <stdint.h>
-#include "common.h"
-#include "enc28j60.h"
-#include "spi.h"
-#include <driverlib/systick.h>
-#include <driverlib/interrupt.h>
-
-#include <lwip/init.h>
-#include <lwip/netif.h>
-#include <lwip/dhcp.h>
-#include <lwip/tcp_impl.h>
-#include <netif/etharp.h>
-
-#include "echo.h"
+#include "main.h"
 
 static volatile unsigned long g_ulFlags;
 
 volatile unsigned long g_ulTickCounter = 0;
 
-#define FLAG_SYSTICK		0
-#define FLAG_RXPKT		1
-#define FLAG_TXPKT		2
-#define FLAG_RXPKTPEND		3
-#define FLAG_ENC_INT		4
+volatile unsigned long g_ulSysTickCount;
 
-#define TICK_MS			250
-#define SYSTICKHZ		(1000/TICK_MS)
+const uint8_t mac_addr[] = { 0x00, 0xC0, 0x033, 0x50, 0x48, 0x12 };
 
-static void
-cpu_init(void) {
+
+
+int main(void) {
+  cpu_init();
+  uart_init();
+  systick_init();
+  AdsPinConfig();
+  spi_init();
+
+  init_ethernet();
+
+  httpd_init();
+
+
+
+  last_arp_time = last_tcp_time = 0;
+
+  while(1) {
+    //MAP_SysCtlSleep();
+
+    task_lwip();
+    task_enc();
+    task_ads();
+
+  }
+
+  return 0;
+}
+
+
+void task_ads()
+{
+	if(HWREGBITW(&g_ulFlags, FLAG_ADS_INT) == 1)
+	{
+		HWREGBITW(&g_ulFlags, FLAG_ADS_INT) = 0;
+
+		ADS_START_CLR();
+		Ads_Read();
+		ADS_START();
+
+		ROM_GPIOPinIntClear(ADS_DRY_PORT, 0xff);
+		MAP_IntEnable(INT_GPIOC);
+		MAP_GPIOPinIntEnable(ADS_DRY_PORT, ADS_DRY_PIN);
+	}
+}
+
+void task_lwip(void)
+{
+	if(HWREGBITW(&g_ulFlags, FLAG_SYSTICK) == 1) {
+	      HWREGBITW(&g_ulFlags, FLAG_SYSTICK) = 0;
+
+	      if( (g_ulTickCounter - last_arp_time) * TICK_MS >= ARP_TMR_INTERVAL) {
+	    	  etharp_tmr();
+	    	  last_arp_time = g_ulTickCounter;
+	      }
+
+	      if( (g_ulTickCounter - last_tcp_time) * TICK_MS >= TCP_TMR_INTERVAL) {
+	    	  tcp_tmr();
+	    	  last_tcp_time = g_ulTickCounter;
+	      }
+
+	      if( (g_ulTickCounter - last_dhcp_coarse_time) * TICK_MS >= DHCP_COARSE_TIMER_MSECS) {
+		dhcp_coarse_tmr();
+		last_dhcp_coarse_time = g_ulTickCounter;
+	      }
+
+	      if( (g_ulTickCounter - last_dhcp_fine_time) * TICK_MS >= DHCP_FINE_TIMER_MSECS) {
+		dhcp_fine_tmr();
+		last_dhcp_fine_time = g_ulTickCounter;
+	      }
+	    }
+
+
+}
+
+void task_enc(void)
+{
+	if( HWREGBITW(&g_ulFlags, FLAG_ENC_INT) == 1 )
+	{
+		HWREGBITW(&g_ulFlags, FLAG_ENC_INT) = 0;
+		enc_action(&netif_g);
+	}
+}
+
+void init_ethernet(void)
+{
+	  enc28j60_comm_init();
+	  UARTprintf("Welcome\n");
+
+	  enc_init(mac_addr);
+	  systick_init();
+
+	  lwip_init();
+
+	#if !LWIP_DHCP
+	  IP4_ADDR(&gw_g, 10,0,0,1);
+	  IP4_ADDR(&ipaddr_g, 10,0,0,100);
+	  IP4_ADDR(&netmask_g, 255, 255, 255, 0)
+	#else
+	  IP4_ADDR(&gw_g, 0,0,0,0);
+	  IP4_ADDR(&ipaddr_g, 0,0,0,0);
+	  IP4_ADDR(&netmask_g, 0, 0, 0, 0);
+	#endif
+
+	  netif_add(&netif_g, &ipaddr_g, &netmask_g, &gw_g, NULL, enc28j60_init, ethernet_input);
+	  netif_set_default(&netif_g);
+
+	#if !LWIP_DHCP
+	  netif_set_up(&netif_g);
+	#else
+	  dhcp_start(&netif_g);
+	#endif
+
+}
+
+void systick_init()
+{
+  //
+  // Configure SysTick for a periodic interrupt.
+  //
+  MAP_SysTickPeriodSet(MAP_SysCtlClockGet() / SYSTICKHZ);
+  MAP_SysTickEnable();
+  MAP_SysTickIntEnable();
+
+  //MAP_IntEnable(INT_GPIOA);
+  MAP_IntEnable(INT_GPIOE);
+  MAP_IntMasterEnable();
+
+  MAP_SysCtlPeripheralClockGating(false);
+
+  MAP_GPIOIntTypeSet(GPIO_PORTE_BASE, ENC_INT, GPIO_FALLING_EDGE);
+  MAP_GPIOPinIntClear(GPIO_PORTE_BASE, ENC_INT);
+  MAP_GPIOPinIntEnable(GPIO_PORTE_BASE, ENC_INT);
+  UARTprintf("int enabled\n");
+}
+
+uint8_t spi_send(uint8_t c) {
+  unsigned long val;
+  MAP_SSIDataPut(SSI2_BASE, c);
+  MAP_SSIDataGet(SSI2_BASE, &val);
+  return (uint8_t)val;
+}
+
+
+void
+SysTickIntHandler(void)
+{
+    //
+    // Increment the system tick count.
+    //
+    g_ulTickCounter++;
+    g_ulSysTickCount++;
+    //
+    // Indicate that a SysTick interrupt has occurred.
+    //
+    HWREGBITW(&g_ulFlags, FLAG_SYSTICK) = 1;
+    //g_ulFlags |= FLAG_SYSTICK;
+}
+
+
+void GPIOPortEIntHandler(void) {
+  uint8_t p = MAP_GPIOPinIntStatus(GPIO_PORTE_BASE, true) & 0xFF;
+
+  MAP_GPIOPinIntClear(GPIO_PORTE_BASE, p);
+
+  HWREGBITW(&g_ulFlags, FLAG_ENC_INT) = 1;
+}
+
+static void cpu_init(void) {
+	g_ulSysTickCount = 0;
+		// Enable lazy stacking for interrupt handlers.  This allows floating-point
+			// instructions to be used within interrupt handlers, but at the expense of extra stack usage.
+	ROM_FPULazyStackingEnable();
+
   // A safety loop in order to interrupt the MCU before setting the clock (wrongly)
   int i;
   for(i=0; i<1000000; i++);
@@ -38,8 +191,7 @@ cpu_init(void) {
       SYSCTL_XTAL_16MHZ);
 }
 
-static void
-uart_init(void) {
+static void uart_init(void) {
   MAP_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
   // Configure PD0 and PD1 for UART
@@ -51,8 +203,7 @@ uart_init(void) {
   UARTStdioInitExpClk(0, 115200);
 }
 
-static void
-spi_init(void) {
+static void spi_init(void) {
   MAP_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
 
   // Configure SSI1 for SPI RAM usage
@@ -69,191 +220,26 @@ spi_init(void) {
   while(MAP_SSIDataGetNonBlocking(SSI2_BASE, &b)) {}
 }
 
-static void
-enc28j60_comm_init(void) {
+static void enc28j60_comm_init(void) {
   MAP_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
   MAP_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOE);
-  MAP_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
   MAP_GPIOPinTypeGPIOOutput(GPIO_PORTB_BASE, ENC_CS);
-  MAP_GPIOPinTypeGPIOOutput(GPIO_PORTA_BASE, SRAM_CS);
-//  MAP_GPIOPinTypeGPIOOutput(GPIO_PORTA_BASE, ENC_CS | ENC_RESET | SRAM_CS);
   MAP_GPIOPinTypeGPIOInput(GPIO_PORTE_BASE, ENC_INT);
 
-//  MAP_GPIOPinWrite(GPIO_PORTA_BASE, ENC_RESET, 0);
   MAP_GPIOPinWrite(ENC_CS_PORT, ENC_CS, ENC_CS);
-  MAP_GPIOPinWrite(GPIO_PORTA_BASE, SRAM_CS, SRAM_CS);
 }
 
-#define SELECT_MEM() MAP_GPIOPinWrite(GPIO_PORTA_BASE, SRAM_CS, 0)
-#define DESELECT_MEM() MAP_GPIOPinWrite(GPIO_PORTA_BASE, SRAM_CS, SRAM_CS)
-
-void spi_mem_write(uint16_t addr, const uint8_t *buf, uint16_t count) {
-  SELECT_MEM();
-  spi_send(0x02);
-  spi_send(addr >> 8);
-  spi_send(addr & 0xFF);
-  for(;count>0;count--) {
-    spi_send(*buf);
-    buf++;
-  }
-  DESELECT_MEM();
-}
-
-void spi_mem_read(uint16_t addr, uint8_t *buf, uint16_t count) {
-  SELECT_MEM();
-  spi_send(0x03);
-  spi_send(addr >> 8);
-  spi_send(addr & 0xFF);
-  for(;count>0;count--) {
-    *buf = spi_send(0xFF);
-    buf++;
-  }
-  DESELECT_MEM();
-}
-
-const uint8_t mac_addr[] = { 0x00, 0xC0, 0x033, 0x50, 0x48, 0x12 };
-
-int main(void) {
-  cpu_init();
-  uart_init();
-  spi_init();
-  enc28j60_comm_init();
-
-  printf("Welcome\n");
-
-  enc_init(mac_addr);
-
-  //
-  // Configure SysTick for a periodic interrupt.
-  //
-  MAP_SysTickPeriodSet(MAP_SysCtlClockGet() / SYSTICKHZ);
-  MAP_SysTickEnable();
-  MAP_SysTickIntEnable();
-
-  //MAP_IntEnable(INT_GPIOA);
-  MAP_IntEnable(INT_GPIOE);
-  MAP_IntMasterEnable();
-
-  MAP_SysCtlPeripheralClockGating(false);
-
-  printf("int enabled\n");
-
-  MAP_GPIOIntTypeSet(GPIO_PORTE_BASE, ENC_INT, GPIO_FALLING_EDGE);
-  MAP_GPIOPinIntClear(GPIO_PORTE_BASE, ENC_INT);
-  MAP_GPIOPinIntEnable(GPIO_PORTE_BASE, ENC_INT);
-
-  lwip_init();
-
-  struct netif netif;
-  ip_addr_t ipaddr, netmask, gw;
-
-#if 0
-  IP4_ADDR(&gw, 10,0,0,1);
-  IP4_ADDR(&ipaddr, 10,0,0,100);
-  IP4_ADDR(&netmask, 255, 255, 255, 0)
-#else
-  IP4_ADDR(&gw, 0,0,0,0);
-  IP4_ADDR(&ipaddr, 0,0,0,0);
-  IP4_ADDR(&netmask, 0, 0, 0, 0);
-#endif
-
-  netif_add(&netif, &ipaddr, &netmask, &gw, NULL, enc28j60_init, ethernet_input);
-  netif_set_default(&netif);
-  //  netif_set_up(&netif);
-
-  dhcp_start(&netif);
-
-  echo_init();
-
-  unsigned long last_arp_time, last_tcp_time, last_dhcp_coarse_time,
-    last_dhcp_fine_time;
-
-  last_arp_time = last_tcp_time = 0;
-
-  while(1) {
-    MAP_SysCtlSleep();
-
-    if(HWREGBITW(&g_ulFlags, FLAG_SYSTICK) == 1) {
-      HWREGBITW(&g_ulFlags, FLAG_SYSTICK) = 0;
-
-      if( (g_ulTickCounter - last_arp_time) * TICK_MS >= ARP_TMR_INTERVAL) {
-	etharp_tmr();
-	last_arp_time = g_ulTickCounter;
-      }
-
-      if( (g_ulTickCounter - last_tcp_time) * TICK_MS >= TCP_TMR_INTERVAL) {
-	tcp_tmr();
-	last_tcp_time = g_ulTickCounter;
-      }
-
-      if( (g_ulTickCounter - last_dhcp_coarse_time) * TICK_MS >= DHCP_COARSE_TIMER_MSECS) {
-	dhcp_coarse_tmr();
-	last_dhcp_coarse_time = g_ulTickCounter;
-      }
-
-      if( (g_ulTickCounter - last_dhcp_fine_time) * TICK_MS >= DHCP_FINE_TIMER_MSECS) {
-	dhcp_fine_tmr();
-	last_dhcp_fine_time = g_ulTickCounter;
-      }
-    }
-
-    if( HWREGBITW(&g_ulFlags, FLAG_ENC_INT) == 1 ) {
-      HWREGBITW(&g_ulFlags, FLAG_ENC_INT) = 0;
-      enc_action(&netif);
-    }
-
-  }
-
-  return 0;
-}
-
-uint8_t spi_send(uint8_t c) {
-  unsigned long val;
-  MAP_SSIDataPut(SSI2_BASE, c);
-  MAP_SSIDataGet(SSI2_BASE, &val);
-  return (uint8_t)val;
-}
-
-
-#if 0
-void
-dhcpc_configured(const struct dhcpc_state *s)
+void DataReadyIntHandler(void)
 {
-    uip_sethostaddr(&s->ipaddr);
-    uip_setnetmask(&s->netmask);
-    uip_setdraddr(&s->default_router);
-    printf("IP: %d.%d.%d.%d\n", s->ipaddr[0] & 0xff, s->ipaddr[0] >> 8,
-	   s->ipaddr[1] & 0xff, s->ipaddr[1] >> 8);
-}
-#endif
+	uint8_t p = ROM_GPIOPinIntStatus(ADS_DRY_PORT, true) & 0xFF;
 
-void
-SysTickIntHandler(void)
-{
-    //
-    // Increment the system tick count.
-    //
-    g_ulTickCounter++;
+	MAP_IntDisable(INT_GPIOC);
+	MAP_GPIOPinIntDisable(ADS_DRY_PORT, ADS_DRY_PIN);
 
-    //
-    // Indicate that a SysTick interrupt has occurred.
-    //
-    HWREGBITW(&g_ulFlags, FLAG_SYSTICK) = 1;
-    //g_ulFlags |= FLAG_SYSTICK;
+	GPIOPinIntClear(ADS_DRY_PORT, p);
+
+	HWREGBITW(&g_ulFlags, FLAG_ADS_INT) = 1;
+
 }
 
-#if 0
-clock_time_t
-clock_time(void)
-{
-    return((clock_time_t)g_ulTickCounter);
-}
-#endif
 
-void GPIOPortEIntHandler(void) {
-  uint8_t p = MAP_GPIOPinIntStatus(GPIO_PORTE_BASE, true) & 0xFF;
-
-  MAP_GPIOPinIntClear(GPIO_PORTE_BASE, p);
-
-  HWREGBITW(&g_ulFlags, FLAG_ENC_INT) = 1;
-}
